@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"regexp"
 	"time"
 
 	"github.com/mattermost/mattermost-server/v6/model"
@@ -50,19 +49,6 @@ func main() {
 		app.mattermostTeam = team
 	}
 
-	// Find and save the talking channel to app struct.
-	if channel, resp, err := app.mattermostClient.GetChannelByName(
-		app.config.mattermostChannel, app.mattermostTeam.Id, "",
-	); err != nil {
-		app.logger.Fatal().Err(err).Msg("Could not find channel. Is this bot added to that channel ?")
-	} else {
-		app.logger.Debug().Interface("channel", channel).Interface("resp", resp).Msg("")
-		app.mattermostChannel = channel
-	}
-
-	// Send a message (new post).
-	sendMsgToTalkingChannel(app, "Hi! I am a bot.", "")
-
 	// Listen to live events coming in via websocket.
 	listenToEvents(app)
 }
@@ -80,21 +66,6 @@ func setupGracefulShutdown(app *application) {
 			os.Exit(0)
 		}
 	}()
-}
-
-func sendMsgToTalkingChannel(app *application, msg string, replyToId string) {
-	// Note that replyToId should be empty for a new post.
-	// All replies in a thread should reply to root.
-
-	post := &model.Post{}
-	post.ChannelId = app.mattermostChannel.Id
-	post.Message = msg
-
-	post.RootId = replyToId
-
-	if _, _, err := app.mattermostClient.CreatePost(post); err != nil {
-		app.logger.Error().Err(err).Str("RootID", replyToId).Msg("Failed to create post")
-	}
 }
 
 func listenToEvents(app *application) {
@@ -116,7 +87,6 @@ func listenToEvents(app *application) {
 		app.mattermostWebSocketClient.Listen()
 
 		for event := range app.mattermostWebSocketClient.EventChannel {
-			fmt.Println(event.GetData())
 			// Launch new goroutine for handling the actual event.
 			// If required, you can limit the number of events beng processed at a time.
 			go handleWebSocketEvent(app, event)
@@ -125,13 +95,7 @@ func listenToEvents(app *application) {
 }
 
 func handleWebSocketEvent(app *application, event *model.WebSocketEvent) {
-
-	// Ignore other channels.
-	if event.GetBroadcast().ChannelId != app.mattermostChannel.Id {
-		return
-	}
-
-	// Ignore other types of events.
+	// Only process 'Posted' events.
 	if event.EventType() != model.WebsocketEventPosted {
 		return
 	}
@@ -141,6 +105,7 @@ func handleWebSocketEvent(app *application, event *model.WebSocketEvent) {
 	err := json.Unmarshal([]byte(event.GetData()["post"].(string)), &post)
 	if err != nil {
 		app.logger.Error().Err(err).Msg("Could not cast event to *model.Post")
+		return
 	}
 
 	// Ignore messages sent by this bot itself.
@@ -148,23 +113,40 @@ func handleWebSocketEvent(app *application, event *model.WebSocketEvent) {
 		return
 	}
 
-	// Handle however you want.
-	handlePost(app, post)
+	// Get the channel information
+	channel, _, appErr := app.mattermostClient.GetChannel(post.ChannelId, "")
+	if appErr != nil {
+		app.logger.Error().Err(appErr).Msg("Failed to get channel")
+		return
+	}
+
+	// Check if the channel is a direct message channel
+	if channel.Type != "D" {
+		return
+	}
+
+	// Handle the direct message post.
+	handleDirectMessagePost(app, post)
 }
 
-func handlePost(app *application, post *model.Post) {
-	app.logger.Debug().Str("message", post.Message).Msg("")
-	app.logger.Debug().Interface("post", post).Msg("")
+func handleDirectMessagePost(app *application, post *model.Post) {
+	// Log the received message for debugging purposes.
+	app.logger.Debug().Str("message", post.Message).Msg("Received direct message")
 
-	if matched, _ := regexp.MatchString(`(?:^|\W)hello(?:$|\W)`, post.Message); matched {
+	// Reply with "You said: [message text]"
+	replyText := fmt.Sprintf("You said: %s", post.Message)
+	sendMsgToDirectChannel(app, replyText, post.ChannelId)
+}
 
-		// If post has a root ID then its part of thread, so reply there.
-		// If not, then post is independent, so reply to the post.
-		if post.RootId != "" {
-			sendMsgToTalkingChannel(app, "I replied in an existing thread.", post.RootId)
-		} else {
-			sendMsgToTalkingChannel(app, "I just replied to a new post, starting a chain.", post.Id)
-		}
-		return
+func sendMsgToDirectChannel(app *application, msg string, channelId string) {
+	// Create a new post in the specified channel.
+	post := &model.Post{
+		ChannelId: channelId,
+		Message:   msg,
+	}
+
+	// Send the message.
+	if _, _, err := app.mattermostClient.CreatePost(post); err != nil {
+		app.logger.Error().Err(err).Str("ChannelID", channelId).Msg("Failed to send direct message")
 	}
 }

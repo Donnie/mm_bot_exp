@@ -17,7 +17,6 @@ type application struct {
 	mattermostClient          *model.Client4
 	mattermostWebSocketClient *model.WebSocketClient
 	mattermostUser            *model.User
-	mattermostChannel         *model.Channel
 	mattermostTeam            *model.Team
 }
 
@@ -25,7 +24,6 @@ type config struct {
 	mattermostUserName string
 	mattermostTeamName string
 	mattermostToken    string
-	mattermostChannel  string
 	mattermostServer   *url.URL
 }
 
@@ -35,7 +33,6 @@ func loadConfig() config {
 	settings.mattermostTeamName = os.Getenv("MM_TEAM")
 	settings.mattermostUserName = os.Getenv("MM_USERNAME")
 	settings.mattermostToken = os.Getenv("MM_TOKEN")
-	settings.mattermostChannel = os.Getenv("MM_CHANNEL")
 	settings.mattermostServer, _ = url.Parse(os.Getenv("MM_SERVER"))
 
 	return settings
